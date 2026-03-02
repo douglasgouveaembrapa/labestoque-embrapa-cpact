@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   LayoutDashboard, Package, PlusCircle, 
-  MinusCircle, Search, Save, Database, FlaskConical, X, FileText, Download 
+  MinusCircle, Search, Save, Database, FlaskConical, X, FileText, Download, ShieldAlert 
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -21,6 +21,7 @@ type Item = {
   validade: string;
   lote: string;
   situacao: string;
+  controlado_por: string;
 };
 
 // Tipo para o Relatório
@@ -33,6 +34,7 @@ type Historico = {
   quantidade: number;
   responsavel: string;
   laboratorio: string;
+  controlado_por: string;
 };
 
 export default function SistemaEstoqueSupabase() {
@@ -64,7 +66,8 @@ export default function SistemaEstoqueSupabase() {
     novoUnidade: 'g',
     novoLote: '',
     novoValidade: '',
-    novoSituacao: 'Ok'
+    novoSituacao: 'Ok',
+    novoControladoPor: 'Não controlado'
   });
 
   // Função para buscar Estoque (paginação)
@@ -133,11 +136,12 @@ export default function SistemaEstoqueSupabase() {
       novoUnidade: 'g',
       novoLote: '',
       novoValidade: '',
-      novoSituacao: 'Ok'
+      novoSituacao: 'Ok',
+      novoControladoPor: 'Não controlado'
     });
   };
 
-  const registrarLog = async (tipo: string, reagente: string, lote: string, qtd: number, resp: string, lab: string) => {
+  const registrarLog = async (tipo: string, reagente: string, lote: string, qtd: number, resp: string, lab: string, controlado: string) => {
     const { error } = await supabase.from('historico').insert([{
       data_movimentacao: new Date().toISOString(),
       tipo: tipo,
@@ -145,7 +149,8 @@ export default function SistemaEstoqueSupabase() {
       lote: lote,
       quantidade: qtd,
       responsavel: resp,
-      laboratorio: lab
+      laboratorio: lab,
+      controlado_por: controlado || 'Não controlado' 
     }]);
 
     if (error) {
@@ -172,12 +177,21 @@ export default function SistemaEstoqueSupabase() {
         unidade: form.novoUnidade,
         lote: form.novoLote,
         validade: form.novoValidade,
-        situacao: form.novoSituacao
+        situacao: form.novoSituacao,
+        controlado_por: form.novoControladoPor
       }]);
 
       if (error) alert("Erro ao cadastrar: " + error.message);
       else {
-        await registrarLog('Cadastro', form.novoReagente, form.novoLote, form.quantidade, form.responsavel, form.novoLab);
+        await registrarLog(
+          'Cadastro', 
+          form.novoReagente, 
+          form.novoLote, 
+          form.quantidade, 
+          form.responsavel, 
+          form.novoLab, 
+          form.novoControladoPor
+        );
         alert("Novo reagente cadastrado com sucesso!");
         trocarAba('Cadastro');
         fetchEstoque();
@@ -206,7 +220,17 @@ export default function SistemaEstoqueSupabase() {
 
       if (error) alert("Erro ao atualizar banco: " + error.message);
       else {
-        await registrarLog(form.tipo, itemSelecionadoRef.reagente, itemSelecionadoRef.lote, form.quantidade, form.responsavel, itemSelecionadoRef.laboratorio);
+        const controleLog = itemSelecionadoRef.controlado_por || 'Não controlado';
+        
+        await registrarLog(
+          form.tipo, 
+          itemSelecionadoRef.reagente, 
+          itemSelecionadoRef.lote, 
+          form.quantidade, 
+          form.responsavel, 
+          itemSelecionadoRef.laboratorio,
+          controleLog
+        );
         alert(`${form.tipo} realizada! Novo saldo: ${novaQtd}`);
         trocarAba(form.tipo);
         fetchEstoque();
@@ -214,7 +238,6 @@ export default function SistemaEstoqueSupabase() {
     }
   };
 
-  // --- Filtros ---
   const filteredItems = useMemo(() => {
     return items.filter(i => {
       const matchLab = selectedLab === 'Todos' || i.laboratorio === selectedLab;
@@ -254,14 +277,15 @@ export default function SistemaEstoqueSupabase() {
       log.lote,
       log.quantidade,
       log.laboratorio,
+      log.controlado_por || 'Não controlado',
       log.responsavel
     ]);
 
     autoTable(doc, {
-      head: [['Data/Hora', 'Tipo', 'Reagente', 'Lote', 'Qtd', 'Laboratório', 'Responsável']],
+      head: [['Data/Hora', 'Tipo', 'Reagente', 'Lote', 'Qtd', 'Laboratório', 'Controle', 'Responsável']],
       body: tabelaDados,
       startY: 40,
-      styles: { fontSize: 8 },
+      styles: { fontSize: 7 },
       headStyles: { fillColor: [0, 69, 134] },
     });
 
@@ -270,9 +294,7 @@ export default function SistemaEstoqueSupabase() {
 
   const sugestoesBusca = useMemo(() => {
     const termo = reagenteBusca.toLowerCase();
-    
     if (!termo) return items.slice(0, 100);
-
     return items.filter(i => 
       (i.reagente || "").toLowerCase().includes(termo) || 
       (i.lote || "").toLowerCase().includes(termo) ||
@@ -378,6 +400,8 @@ export default function SistemaEstoqueSupabase() {
                       <th className="p-3">Reagente</th>
                       <th className="p-3">Lote</th>
                       <th className="p-3 text-right">Qtd</th>
+                      <th className="p-3">Laboratório</th>
+                      <th className="p-3">Controle</th>
                       <th className="p-3">Responsável</th>
                     </tr>
                   </thead>
@@ -399,15 +423,24 @@ export default function SistemaEstoqueSupabase() {
                         </td>
                         <td className="p-3 font-medium text-slate-700">
                           {log.reagente}
-                          <div className="text-[10px] text-slate-400">{log.laboratorio}</div>
                         </td>
                         <td className="p-3 text-xs text-slate-500">{log.lote}</td>
                         <td className="p-3 text-right font-mono font-bold text-slate-700">{log.quantidade}</td>
+                        <td className="p-3 text-xs text-slate-600">{log.laboratorio}</td>
+                        <td className="p-3 text-xs">
+                           {log.controlado_por && log.controlado_por !== 'Não controlado' ? (
+                             <span className="text-red-600 font-bold flex items-center gap-1">
+                               <ShieldAlert size={10} /> {log.controlado_por}
+                             </span>
+                           ) : (
+                             <span className="text-slate-400">Não controlado</span>
+                           )}
+                        </td>
                         <td className="p-3 text-xs text-slate-600 capitalize">{log.responsavel}</td>
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={6} className="p-8 text-center text-slate-400 italic">
+                        <td colSpan={8} className="p-8 text-center text-slate-400 italic">
                           Nenhuma movimentação encontrada neste período.
                         </td>
                       </tr>
@@ -435,6 +468,7 @@ export default function SistemaEstoqueSupabase() {
                   <tr>
                     <th className="p-4 border-r text-center">Laboratório</th>
                     <th className="p-4">Reagente / CAS</th>
+                    <th className="p-4">Controle</th>
                     <th className="p-4">Lote</th>
                     <th className="p-4 text-right">Saldo</th>
                     <th className="p-4 text-center">Situação</th>
@@ -444,7 +478,21 @@ export default function SistemaEstoqueSupabase() {
                   {filteredItems.map((item, idx) => (
                     <tr key={`${item.reagente}-${item.lote}-${idx}`} className="hover:bg-blue-50/20 transition">
                       <td className="p-4 text-[10px] font-bold text-blue-800 uppercase border-r bg-slate-50/50 text-center">{item.laboratorio}</td>
-                      <td className="p-4 font-medium">{item.reagente} <br/><span className="text-[10px] text-slate-400 font-normal italic">CAS: {item.cas || '-'}</span></td>
+                      <td className="p-4 font-medium">
+                        {item.reagente} 
+                        <br/>
+                        <span className="text-[10px] text-slate-400 font-normal italic">CAS: {item.cas || '-'}</span>
+                      </td>
+                      <td className="p-4">
+                        {/* AQUI ESTÁ A CORREÇÃO DE "LIVRES" PARA "NÃO CONTROLADO" */}
+                        {item.controlado_por && item.controlado_por !== 'Não controlado' ? (
+                          <div className="flex items-center gap-1 text-[10px] text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded w-fit border border-red-100">
+                            <ShieldAlert size={12} /> {item.controlado_por}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">Não controlado</span>
+                        )}
+                      </td>
                       <td className="p-4 text-slate-500 text-xs italic">{item.lote || '-'}</td>
                       <td className="p-4 text-right font-mono font-bold">{item.quantidade} <span className="text-[10px] font-normal text-slate-400">{item.unidade}</span></td>
                       <td className="p-4 text-center">
@@ -479,7 +527,6 @@ export default function SistemaEstoqueSupabase() {
                   <MinusCircle size={24} /> Saída
                 </button>
                 <button onClick={() => trocarAba('Cadastro')} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition ${form.tipo === 'Cadastro' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'border-slate-100 hover:bg-slate-50'}`}>
-                  {/* ALTERAÇÃO AQUI TAMBÉM: Usei FlaskConical para consistência e correção do erro */}
                   <FlaskConical size={24} /> Novo Item
                 </button>
               </div>
@@ -521,6 +568,17 @@ export default function SistemaEstoqueSupabase() {
                         <label className="block text-sm font-bold mb-1">Validade</label>
                         <input type="text" className="w-full p-2.5 border rounded-lg" placeholder="DD/MM/AAAA" value={form.novoValidade} onChange={e => setForm({...form, novoValidade: e.target.value})} />
                     </div>
+                    
+                    {/* CAMPO NOVO (RESTAURADO) */}
+                    <div>
+                      <label className="block text-sm font-bold mb-1 text-red-700">Controlado Por</label>
+                      <select className="w-full p-2.5 border rounded-lg bg-red-50 text-red-800 font-bold" value={form.novoControladoPor} onChange={e => setForm({...form, novoControladoPor: e.target.value})}>
+                        <option value="Não controlado">Não controlado</option>
+                        <option value="Exército">Exército</option>
+                        <option value="Polícia Federal">Polícia Federal</option>
+                      </select>
+                    </div>
+
                     <div>
                       <label className="block text-sm font-bold mb-1">Situação</label>
                       <select className="w-full p-2.5 border rounded-lg bg-white" value={form.novoSituacao} onChange={e => setForm({...form, novoSituacao: e.target.value})}>
