@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
 import { 
   LayoutDashboard, Package, PlusCircle, 
   MinusCircle, Search, Save, Database, FlaskConical, X, FileText, Download, ShieldAlert, ArrowRightLeft, Menu, Filter, ChevronDown 
@@ -45,8 +45,9 @@ export default function SistemaEstoqueSupabase() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'dashboard' | 'Estoque' | 'movimentacao'>('dashboard');
   
-  // Filtros Estoque
+  // Filtros Estoque (Com Desempenho Otimizado)
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm); // EVITA TRAVAMENTOS NA DIGITAÇÃO
   const [selectedLab, setSelectedLab] = useState('Todos');
 
   // Novos Filtros Relatório (Dashboard)
@@ -56,8 +57,9 @@ export default function SistemaEstoqueSupabase() {
   const [relatorioLabs, setRelatorioLabs] = useState<string[]>([]);
   const [menuFiltroLabAberto, setMenuFiltroLabAberto] = useState(false);
 
-  // Busca Movimentação
+  // Busca Movimentação (Com Desempenho Otimizado)
   const [reagenteBusca, setReagenteBusca] = useState('');
+  const deferredReagenteBusca = useDeferredValue(reagenteBusca); // EVITA TRAVAMENTOS NA DIGITAÇÃO
   const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
   const [itemSelecionadoRef, setItemSelecionadoRef] = useState<Item | null>(null);
 
@@ -358,18 +360,58 @@ export default function SistemaEstoqueSupabase() {
     }
   };
 
+  // --- NOVA BUSCA INTELIGENTE (ESTOQUE GERAL) ---
   const filteredItems = useMemo(() => {
+    const isLabMatch = (i: Item) => selectedLab === 'Todos' || i.laboratorio === selectedLab;
+    
+    // Se não houver texto de busca, apenas filtra por laboratório
+    if (!deferredSearchTerm.trim()) {
+      return items.filter(isLabMatch);
+    }
+
+    // Quebra a busca em várias palavras (ex: "reagente teste" vira ["reagente", "teste"])
+    const terms = deferredSearchTerm.toLowerCase().trim().split(/\s+/);
+    
     return items.filter(i => {
-      const matchLab = selectedLab === 'Todos' || i.laboratorio === selectedLab;
-      const term = searchTerm.toLowerCase();
+      if (!isLabMatch(i)) return false;
+
       const nomeReagente = (i.reagente || "").toLowerCase();
       const numCas = (i.cas || "").toLowerCase();
       const numLote = (i.lote || "").toLowerCase();
-      return matchLab && (nomeReagente.includes(term) || numCas.includes(term) || numLote.includes(term));
-    });
-  }, [items, searchTerm, selectedLab]);
 
-  // Novo filtro robusto para o relatório
+      // EXIGE que todas as palavras digitadas sejam encontradas no item
+      return terms.every(t => 
+        nomeReagente.includes(t) || 
+        numCas.includes(t) || 
+        numLote.includes(t)
+      );
+    });
+  }, [items, deferredSearchTerm, selectedLab]);
+
+  // LIMITADOR DE RENDERIZAÇÃO: Pega apenas os 100 primeiros para o navegador não travar visualmente
+  const itensExibidos = filteredItems.slice(0, 100);
+
+  // --- NOVA BUSCA INTELIGENTE (SUGESTÕES DA ÁREA DE LANÇAMENTO) ---
+  const sugestoesBusca = useMemo(() => {
+    if (!deferredReagenteBusca.trim()) return items.slice(0, 100);
+    
+    const terms = deferredReagenteBusca.toLowerCase().trim().split(/\s+/);
+    
+    return items.filter(i => {
+      const nomeReagente = (i.reagente || "").toLowerCase();
+      const numCas = (i.cas || "").toLowerCase();
+      const numLote = (i.lote || "").toLowerCase();
+      
+      return terms.every(t => 
+        nomeReagente.includes(t) || 
+        numCas.includes(t) || 
+        numLote.includes(t)
+      );
+    }).slice(0, 100);
+  }, [deferredReagenteBusca, items]);
+
+
+  // Filtro robusto para o relatório
   const filteredLogs = useMemo(() => {
     return logs.filter(log => {
       // 1. Filtro de Data
@@ -432,16 +474,6 @@ export default function SistemaEstoqueSupabase() {
 
     doc.save("relatorio_estoque.pdf");
   };
-
-  const sugestoesBusca = useMemo(() => {
-    const termo = reagenteBusca.toLowerCase();
-    if (!termo) return items.slice(0, 100);
-    return items.filter(i => 
-      (i.reagente || "").toLowerCase().includes(termo) || 
-      (i.lote || "").toLowerCase().includes(termo) ||
-      (i.cas || "").toLowerCase().includes(termo)
-    ).slice(0, 100);
-  }, [reagenteBusca, items]);
 
   const Req = () => <span className="text-red-500 ml-1 font-bold">*</span>;
 
@@ -689,7 +721,7 @@ export default function SistemaEstoqueSupabase() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredItems.map((item, idx) => {
+                  {itensExibidos.map((item, idx) => {
                     const rowId = `${item.reagente}-${item.lote}-${item.laboratorio}`;
                     const hasObs = !!item.observacoes && item.observacoes.trim() !== '';
 
@@ -765,6 +797,23 @@ export default function SistemaEstoqueSupabase() {
                       </td>
                     </tr>
                   )})}
+                  
+                  {/* MENSAGEM DE AVISO SE HOUVER MAIS DE 100 ITENS */}
+                  {filteredItems.length > 100 && (
+                    <tr>
+                      <td colSpan={7} className="p-4 text-center text-slate-500 bg-slate-50 border-t text-xs">
+                        Mostrando os 100 primeiros de <strong className="text-slate-700">{filteredItems.length}</strong> resultados. 
+                        Continue digitando no campo de busca para afunilar mais.
+                      </td>
+                    </tr>
+                  )}
+                  {filteredItems.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400 italic">
+                        Nenhum item encontrado com essa busca.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
