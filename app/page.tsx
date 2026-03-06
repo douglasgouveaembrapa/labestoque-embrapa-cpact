@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   LayoutDashboard, Package, PlusCircle, 
-  MinusCircle, Search, Save, Database, FlaskConical, X, FileText, Download, ShieldAlert 
+  MinusCircle, Search, Save, Database, FlaskConical, X, FileText, Download, ShieldAlert, ArrowRightLeft, Menu, Filter, ChevronDown 
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -22,6 +22,8 @@ type Item = {
   lote: string;
   situacao: string;
   controlado_por: string;
+  fonte_recurso?: string; 
+  observacoes?: string;   
 };
 
 // Tipo para o Relatório
@@ -47,19 +49,29 @@ export default function SistemaEstoqueSupabase() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLab, setSelectedLab] = useState('Todos');
 
-  // Filtros Relatório (Dashboard)
+  // Novos Filtros Relatório (Dashboard)
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
+  const [filtroRelatorioTipo, setFiltroRelatorioTipo] = useState('Todas');
+  const [relatorioLabs, setRelatorioLabs] = useState<string[]>([]);
+  const [menuFiltroLabAberto, setMenuFiltroLabAberto] = useState(false);
 
   // Busca Movimentação
   const [reagenteBusca, setReagenteBusca] = useState('');
   const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
   const [itemSelecionadoRef, setItemSelecionadoRef] = useState<Item | null>(null);
 
+  // Estados para as Novas Ações do Estoque
+  const [menuAbertoId, setMenuAbertoId] = useState<string | null>(null);
+  const [modalObsAberto, setModalObsAberto] = useState(false);
+  const [itemParaObs, setItemParaObs] = useState<Item | null>(null);
+  const [textoObs, setTextoObs] = useState('');
+
   const [form, setForm] = useState({
-    tipo: 'Entrada' as 'Entrada' | 'Saída' | 'Cadastro',
+    tipo: 'Transferência' as 'Transferência' | 'Saída' | 'Cadastro',
     quantidade: 0,
     responsavel: '',
+    labDestino: '',
     novoReagente: '',
     novoLab: '',
     novoCas: '',
@@ -67,7 +79,9 @@ export default function SistemaEstoqueSupabase() {
     novoLote: '',
     novoValidade: '',
     novoSituacao: 'Ok',
-    novoControladoPor: 'Não controlado'
+    novoControladoPor: 'Não controlado',
+    novoFonteRecurso: '', 
+    novoObservacoes: ''   
   });
 
   // Função para buscar Estoque (paginação)
@@ -122,13 +136,21 @@ export default function SistemaEstoqueSupabase() {
     fetchHistorico();
   }, []);
 
-  // --- MÁSCARA DE DATA (NOVIDADE AQUI) ---
-  const handleDataChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, ""); // Remove tudo que não é número
-    
-    if (value.length > 8) value = value.slice(0, 8); // Limita a 8 números
+  const labsDisponiveis = useMemo(() => Array.from(new Set(items.map(i => i.laboratorio))).sort(), [items]);
 
-    // Adiciona as barras
+  // Pré-selecionar todos os laboratórios no filtro do Dashboard quando eles carregarem
+  useEffect(() => {
+    if (labsDisponiveis.length > 0 && relatorioLabs.length === 0) {
+      setRelatorioLabs(labsDisponiveis);
+    }
+  }, [labsDisponiveis]);
+
+  // --- MÁSCARA DE DATA ---
+  const handleDataChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, ""); 
+    
+    if (value.length > 8) value = value.slice(0, 8); 
+
     if (value.length >= 5) {
       value = value.replace(/(\d{2})(\d{2})(\d+)/, "$1/$2/$3");
     } else if (value.length >= 3) {
@@ -138,7 +160,7 @@ export default function SistemaEstoqueSupabase() {
     setForm({ ...form, novoValidade: value });
   };
 
-  const trocarAba = (novoTipo: 'Entrada' | 'Saída' | 'Cadastro') => {
+  const trocarAba = (novoTipo: 'Transferência' | 'Saída' | 'Cadastro') => {
     setReagenteBusca('');
     setMostrarSugestoes(false);
     setItemSelecionadoRef(null);
@@ -146,6 +168,7 @@ export default function SistemaEstoqueSupabase() {
       tipo: novoTipo,
       quantidade: 0,
       responsavel: '',
+      labDestino: '',
       novoReagente: '',
       novoLab: '',
       novoCas: '',
@@ -153,8 +176,54 @@ export default function SistemaEstoqueSupabase() {
       novoLote: '',
       novoValidade: '',
       novoSituacao: 'Ok',
-      novoControladoPor: 'Não controlado'
+      novoControladoPor: 'Não controlado',
+      novoFonteRecurso: '',
+      novoObservacoes: ''
     });
+  };
+
+  // --- FUNÇÕES DOS ATALHOS DA TABELA ---
+  const irParaLancamento = (item: Item, tipo: 'Saída' | 'Transferência') => {
+    setView('movimentacao');
+    setMenuAbertoId(null); 
+    
+    setForm({
+      ...form,
+      tipo: tipo,
+      quantidade: 0,
+      labDestino: ''
+    });
+    
+    setItemSelecionadoRef(item);
+    setReagenteBusca(`${item.reagente} (Lote: ${item.lote || '-'}) [${item.laboratorio}]`);
+  };
+
+  const abrirModalObservacao = (item: Item) => {
+    setItemParaObs(item);
+    setTextoObs(item.observacoes || '');
+    setMenuAbertoId(null);
+    setModalObsAberto(true);
+  };
+
+  const salvarObservacao = async () => {
+    if (!itemParaObs) return;
+
+    const { error } = await supabase
+      .from('Estoque')
+      .update({ observacoes: textoObs })
+      .match({ 
+        reagente: itemParaObs.reagente, 
+        laboratorio: itemParaObs.laboratorio,
+        lote: itemParaObs.lote 
+      });
+
+    if (error) {
+      alert("Erro ao salvar observação: " + error.message);
+    } else {
+      alert("Observação atualizada com sucesso!");
+      setModalObsAberto(false);
+      fetchEstoque(); 
+    }
   };
 
   const registrarLog = async (tipo: string, reagente: string, lote: string, qtd: number, resp: string, lab: string, controlado: string) => {
@@ -181,7 +250,7 @@ export default function SistemaEstoqueSupabase() {
     if (!window.confirm(`Tem certeza que deseja ${acaoTexto}?`)) return;
 
     if (form.tipo === 'Cadastro') {
-      if (!form.novoReagente || !form.novoLab || !form.novoCas || !form.responsavel) {
+      if (!form.novoReagente || !form.novoLab || !form.novoCas || !form.responsavel || !form.novoLote || !form.novoFonteRecurso) {
         return alert("⚠️ Preencha todos os campos obrigatórios (*)");
       }
 
@@ -194,7 +263,9 @@ export default function SistemaEstoqueSupabase() {
         lote: form.novoLote,
         validade: form.novoValidade,
         situacao: form.novoSituacao,
-        controlado_por: form.novoControladoPor
+        controlado_por: form.novoControladoPor,
+        fonte_recurso: form.novoFonteRecurso,
+        observacoes: form.novoObservacoes
       }]);
 
       if (error) alert("Erro ao cadastrar: " + error.message);
@@ -212,19 +283,52 @@ export default function SistemaEstoqueSupabase() {
         trocarAba('Cadastro');
         fetchEstoque();
       }
+    } else if (form.tipo === 'Transferência') {
+      if (!itemSelecionadoRef || !form.labDestino || !form.responsavel) {
+        return alert("⚠️ Selecione o reagente, o laboratório de destino e informe o responsável.");
+      }
+
+      if (itemSelecionadoRef.laboratorio === form.labDestino) {
+        return alert("⚠️ O item selecionado já pertence a este laboratório. Escolha um destino diferente.");
+      }
+
+      const { error } = await supabase
+        .from('Estoque')
+        .update({ laboratorio: form.labDestino })
+        .match({ 
+          reagente: itemSelecionadoRef.reagente, 
+          laboratorio: itemSelecionadoRef.laboratorio,
+          lote: itemSelecionadoRef.lote 
+        });
+
+      if (error) alert("Erro ao transferir: " + error.message);
+      else {
+        const controleLog = itemSelecionadoRef.controlado_por || 'Não controlado';
+        
+        await registrarLog(
+          'Transferência', 
+          itemSelecionadoRef.reagente, 
+          itemSelecionadoRef.lote, 
+          itemSelecionadoRef.quantidade, 
+          form.responsavel, 
+          form.labDestino, 
+          controleLog
+        );
+        alert(`Item transferido com sucesso para ${form.labDestino}!`);
+        trocarAba('Transferência');
+        fetchEstoque();
+      }
+
     } else {
       if (!itemSelecionadoRef || form.quantidade <= 0 || !form.responsavel) {
         return alert("⚠️ Selecione o reagente na lista e informe a quantidade/responsável.");
       }
 
       let novaQtd = Number(itemSelecionadoRef.quantidade);
-      if (form.tipo === 'Saída') {
-        if (novaQtd < form.quantidade) return alert("Saldo insuficiente em estoque!");
-        novaQtd -= form.quantidade;
-      } else {
-        novaQtd += form.quantidade;
-      }
-
+      
+      if (novaQtd < form.quantidade) return alert("Saldo insuficiente em estoque!");
+      novaQtd -= form.quantidade;
+      
       const { error } = await supabase
         .from('Estoque')
         .update({ quantidade: novaQtd })
@@ -239,7 +343,7 @@ export default function SistemaEstoqueSupabase() {
         const controleLog = itemSelecionadoRef.controlado_por || 'Não controlado';
         
         await registrarLog(
-          form.tipo, 
+          'Saída', 
           itemSelecionadoRef.reagente, 
           itemSelecionadoRef.lote, 
           form.quantidade, 
@@ -247,8 +351,8 @@ export default function SistemaEstoqueSupabase() {
           itemSelecionadoRef.laboratorio,
           controleLog
         );
-        alert(`${form.tipo} realizada! Novo saldo: ${novaQtd}`);
-        trocarAba(form.tipo);
+        alert(`Saída realizada! Novo saldo: ${novaQtd}`);
+        trocarAba('Saída');
         fetchEstoque();
       }
     }
@@ -265,15 +369,29 @@ export default function SistemaEstoqueSupabase() {
     });
   }, [items, searchTerm, selectedLab]);
 
+  // Novo filtro robusto para o relatório
   const filteredLogs = useMemo(() => {
     return logs.filter(log => {
-      if (!dataInicio && !dataFim) return true;
-      const dataLog = new Date(log.data_movimentacao).toISOString().split('T')[0];
-      const inicio = dataInicio || '0000-01-01';
-      const fim = dataFim || '9999-12-31';
-      return dataLog >= inicio && dataLog <= fim;
+      // 1. Filtro de Data
+      if (dataInicio || dataFim) {
+        const dataLog = new Date(log.data_movimentacao).toISOString().split('T')[0];
+        const inicio = dataInicio || '0000-01-01';
+        const fim = dataFim || '9999-12-31';
+        if (dataLog < inicio || dataLog > fim) return false;
+      }
+      
+      // 2. Filtro de Tipo
+      if (filtroRelatorioTipo !== 'Todas') {
+        if (log.tipo !== filtroRelatorioTipo) return false;
+      }
+
+      // 3. Filtro de Laboratórios
+      if (relatorioLabs.length === 0) return false; // Se não marcar nenhum, esconde tudo
+      if (!relatorioLabs.includes(log.laboratorio)) return false;
+
+      return true;
     });
-  }, [logs, dataInicio, dataFim]);
+  }, [logs, dataInicio, dataFim, filtroRelatorioTipo, relatorioLabs]);
 
   const gerarPDF = () => {
     const doc = new jsPDF();
@@ -282,8 +400,15 @@ export default function SistemaEstoqueSupabase() {
     
     doc.setFontSize(10);
     doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`, 14, 28);
+    
+    let startY = 36;
     if(dataInicio || dataFim) {
-      doc.text(`Período: ${dataInicio ? new Date(dataInicio).toLocaleDateString('pt-BR') : 'Início'} até ${dataFim ? new Date(dataFim).toLocaleDateString('pt-BR') : 'Hoje'}`, 14, 34);
+      doc.text(`Período: ${dataInicio ? new Date(dataInicio).toLocaleDateString('pt-BR') : 'Início'} até ${dataFim ? new Date(dataFim).toLocaleDateString('pt-BR') : 'Hoje'}`, 14, startY);
+      startY += 6;
+    }
+    if(filtroRelatorioTipo !== 'Todas') {
+      doc.text(`Filtro de Tipo: ${filtroRelatorioTipo}`, 14, startY);
+      startY += 6;
     }
 
     const tabelaDados = filteredLogs.map(log => [
@@ -300,7 +425,7 @@ export default function SistemaEstoqueSupabase() {
     autoTable(doc, {
       head: [['Data/Hora', 'Tipo', 'Reagente', 'Lote', 'Qtd', 'Laboratório', 'Controle', 'Responsável']],
       body: tabelaDados,
-      startY: 40,
+      startY: startY + 4,
       styles: { fontSize: 7 },
       headStyles: { fillColor: [0, 69, 134] },
     });
@@ -318,15 +443,14 @@ export default function SistemaEstoqueSupabase() {
     ).slice(0, 100);
   }, [reagenteBusca, items]);
 
-  const labsDisponiveis = useMemo(() => Array.from(new Set(items.map(i => i.laboratorio))).sort(), [items]);
   const Req = () => <span className="text-red-500 ml-1 font-bold">*</span>;
 
   if (loading && items.length === 0) return <div className="p-10 text-center text-blue-600 font-bold italic animate-pulse">Sincronizando Sistema...</div>;
 
   return (
-    <div className="flex min-h-screen bg-slate-100 font-sans text-slate-800">
+    <div className="flex min-h-screen bg-slate-100 font-sans text-slate-800 relative">
       
-      <aside className="w-64 bg-[#004586] text-white flex flex-col shadow-2xl">
+      <aside className="w-64 bg-[#004586] text-white flex flex-col shadow-2xl z-20">
         <div className="p-6 border-b border-white/10">
           <h1 className="text-xl font-bold flex items-center gap-2"><FlaskConical /> LabEstoque v2.0</h1>
           <p className="text-xs text-slate-300 mt-1 uppercase">Embrapa Clima Temperado</p>
@@ -344,7 +468,7 @@ export default function SistemaEstoqueSupabase() {
         </nav>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto">
+      <main className="flex-1 p-8 overflow-y-auto z-10">
         
         {view === 'dashboard' && (
           <div className="space-y-6">
@@ -366,45 +490,116 @@ export default function SistemaEstoqueSupabase() {
             </div>
 
             <div className="bg-white p-6 rounded-2xl shadow-lg border border-slate-200 mt-6">
-              <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                 <h3 className="text-lg font-bold flex items-center gap-2 text-slate-700">
                   <FileText className="text-blue-600" /> Relatório de Movimentações
                 </h3>
                 
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-500 uppercase">De:</span>
-                      <input 
-                        type="date" 
-                        className="bg-white border rounded px-2 py-1 text-sm outline-none focus:border-blue-500 text-slate-600"
-                        value={dataInicio}
-                        onChange={(e) => setDataInicio(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-500 uppercase">Até:</span>
-                      <input 
-                        type="date" 
-                        className="bg-white border rounded px-2 py-1 text-sm outline-none focus:border-blue-500 text-slate-600"
-                        value={dataFim}
-                        onChange={(e) => setDataFim(e.target.value)}
-                      />
-                    </div>
-                    {(dataInicio || dataFim) && (
-                      <button onClick={() => {setDataInicio(''); setDataFim('')}} className="text-red-500 hover:bg-red-50 p-1 rounded">
-                        <X size={16}/>
-                      </button>
-                    )}
-                  </div>
+                <button 
+                  onClick={gerarPDF}
+                  className="bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-red-700 transition shadow-sm font-bold text-sm whitespace-nowrap"
+                >
+                  <Download size={16} /> Baixar PDF
+                </button>
+              </div>
 
-                  <button 
-                    onClick={gerarPDF}
-                    className="bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-red-700 transition shadow-sm font-bold text-sm"
-                  >
-                    <Download size={16} /> Baixar PDF
-                  </button>
+              {/* BARRA DE FILTROS */}
+              <div className="flex flex-wrap items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+                
+                {/* Filtro de Data */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase">Data:</span>
+                  <input 
+                    type="date" 
+                    className="bg-white border rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 text-slate-600 shadow-sm"
+                    value={dataInicio}
+                    onChange={(e) => setDataInicio(e.target.value)}
+                  />
+                  <span className="text-slate-400 text-xs">até</span>
+                  <input 
+                    type="date" 
+                    className="bg-white border rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 text-slate-600 shadow-sm"
+                    value={dataFim}
+                    onChange={(e) => setDataFim(e.target.value)}
+                  />
+                  {(dataInicio || dataFim) && (
+                    <button onClick={() => {setDataInicio(''); setDataFim('')}} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Limpar Datas">
+                      <X size={14}/>
+                    </button>
+                  )}
                 </div>
+
+                <div className="hidden md:block w-px h-8 bg-slate-200"></div>
+
+                {/* Filtro de Tipo */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase">Tipo:</span>
+                  <select 
+                    className="bg-white border rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 text-slate-600 shadow-sm cursor-pointer"
+                    value={filtroRelatorioTipo}
+                    onChange={(e) => setFiltroRelatorioTipo(e.target.value)}
+                  >
+                    <option value="Todas">Todas</option>
+                    <option value="Transferência">Transferência</option>
+                    <option value="Saída">Saída</option>
+                    <option value="Cadastro">Cadastros de novos itens</option>
+                  </select>
+                </div>
+
+                <div className="hidden md:block w-px h-8 bg-slate-200"></div>
+
+                {/* Filtro de Laboratórios (Dropdown) */}
+                <div className="flex items-center gap-2 relative">
+                  <span className="text-xs font-bold text-slate-500 uppercase">Lab:</span>
+                  <button 
+                    onClick={() => setMenuFiltroLabAberto(!menuFiltroLabAberto)}
+                    className="bg-white border rounded px-3 py-1.5 text-sm outline-none focus:border-blue-500 text-slate-700 shadow-sm flex items-center gap-2 hover:bg-blue-50 transition"
+                  >
+                    <Filter size={14} className="text-blue-600" />
+                    {relatorioLabs.length === labsDisponiveis.length ? 'Todos os Labs' : `${relatorioLabs.length} Selecionados`}
+                    <ChevronDown size={14} className="text-slate-400" />
+                  </button>
+
+                  {menuFiltroLabAberto && (
+                    <>
+                      {/* Overlay para fechar ao clicar fora */}
+                      <div className="fixed inset-0 z-30" onClick={() => setMenuFiltroLabAberto(false)}></div>
+                      
+                      <div className="absolute top-full mt-2 left-0 w-64 bg-white border border-slate-200 shadow-2xl rounded-xl z-40 py-2 max-h-64 overflow-y-auto">
+                        <label className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 cursor-pointer border-b mb-1 text-slate-800 font-bold transition">
+                          <input 
+                            type="checkbox" 
+                            className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                            checked={relatorioLabs.length === labsDisponiveis.length && labsDisponiveis.length > 0}
+                            onChange={() => {
+                              if (relatorioLabs.length === labsDisponiveis.length) setRelatorioLabs([]);
+                              else setRelatorioLabs([...labsDisponiveis]);
+                            }}
+                          />
+                          Selecionar Todos
+                        </label>
+                        {labsDisponiveis.map(lab => (
+                          <label key={lab} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm text-slate-600 transition">
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                              checked={relatorioLabs.includes(lab)}
+                              onChange={() => {
+                                if (relatorioLabs.includes(lab)) {
+                                  setRelatorioLabs(relatorioLabs.filter(l => l !== lab));
+                                } else {
+                                  setRelatorioLabs([...relatorioLabs, lab]);
+                                }
+                              }}
+                            />
+                            {lab}
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
               </div>
 
               <div className="overflow-hidden rounded-lg border border-slate-200">
@@ -422,14 +617,15 @@ export default function SistemaEstoqueSupabase() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredLogs.length > 0 ? filteredLogs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50 transition">
+                    {filteredLogs.length > 0 ? filteredLogs.map((log, idx) => (
+                      <tr key={log.id} className={`hover:bg-blue-50 transition cursor-default ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
                         <td className="p-3 text-slate-500 text-xs">
                           {new Date(log.data_movimentacao).toLocaleDateString('pt-BR')} <br/>
                           <span className="text-[10px]">{new Date(log.data_movimentacao).toLocaleTimeString('pt-BR')}</span>
                         </td>
                         <td className="p-3">
                           <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${
+                            log.tipo === 'Transferência' ? 'bg-purple-100 text-purple-700' :
                             log.tipo === 'Entrada' ? 'bg-green-100 text-green-700' :
                             log.tipo === 'Saída' ? 'bg-orange-100 text-orange-700' :
                             'bg-blue-100 text-blue-700'
@@ -457,7 +653,7 @@ export default function SistemaEstoqueSupabase() {
                     )) : (
                       <tr>
                         <td colSpan={8} className="p-8 text-center text-slate-400 italic">
-                          Nenhuma movimentação encontrada neste período.
+                          Nenhuma movimentação encontrada com estes filtros.
                         </td>
                       </tr>
                     )}
@@ -478,9 +674,10 @@ export default function SistemaEstoqueSupabase() {
                 {labsDisponiveis.map(lab => <option key={lab} value={lab}>{lab}</option>)}
               </select>
             </div>
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden border">
+            
+            <div className="bg-white rounded-xl shadow-sm border pb-10">
               <table className="w-full text-sm text-left">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px]">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] border-b">
                   <tr>
                     <th className="p-4 border-r text-center">Laboratório</th>
                     <th className="p-4">Reagente / CAS</th>
@@ -488,17 +685,29 @@ export default function SistemaEstoqueSupabase() {
                     <th className="p-4">Lote</th>
                     <th className="p-4 text-right">Saldo</th>
                     <th className="p-4 text-center">Situação</th>
+                    <th className="p-4 text-center w-10"></th> 
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredItems.map((item, idx) => (
-                    <tr key={`${item.reagente}-${item.lote}-${idx}`} className="hover:bg-blue-50/20 transition">
+                  {filteredItems.map((item, idx) => {
+                    const rowId = `${item.reagente}-${item.lote}-${item.laboratorio}`;
+                    const hasObs = !!item.observacoes && item.observacoes.trim() !== '';
+
+                    return (
+                    <tr key={rowId} className={`hover:bg-blue-50 transition cursor-default ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
                       <td className="p-4 text-[10px] font-bold text-blue-800 uppercase border-r bg-slate-50/50 text-center">{item.laboratorio}</td>
+                      
                       <td className="p-4 font-medium">
-                        {item.reagente} 
+                        <span 
+                          className={`${hasObs ? 'text-slate-500 cursor-help border-b border-dashed border-slate-300' : 'text-slate-800'}`}
+                          title={hasObs ? item.observacoes : ''}
+                        >
+                          {item.reagente}
+                        </span>
                         <br/>
                         <span className="text-[10px] text-slate-400 font-normal italic">CAS: {item.cas || '-'}</span>
                       </td>
+                      
                       <td className="p-4">
                         {item.controlado_por && item.controlado_por !== 'Não controlado' ? (
                           <div className="flex items-center gap-1 text-[10px] text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded w-fit border border-red-100">
@@ -522,8 +731,40 @@ export default function SistemaEstoqueSupabase() {
                           {item.situacao}
                         </span>
                       </td>
+
+                      <td className="p-4 text-center relative">
+                        <button 
+                          onClick={() => setMenuAbertoId(menuAbertoId === rowId ? null : rowId)}
+                          className="p-1 rounded hover:bg-slate-200 text-slate-500 transition"
+                        >
+                          <Menu size={18} />
+                        </button>
+
+                        {menuAbertoId === rowId && (
+                          <div className="absolute right-8 top-10 w-48 bg-white border shadow-xl rounded-xl z-50 text-left overflow-hidden">
+                            <button 
+                              onClick={() => irParaLancamento(item, 'Saída')}
+                              className="w-full px-4 py-3 text-xs font-bold text-orange-600 hover:bg-orange-50 transition border-b flex items-center gap-2"
+                            >
+                              <MinusCircle size={14}/> Saída
+                            </button>
+                            <button 
+                              onClick={() => irParaLancamento(item, 'Transferência')}
+                              className="w-full px-4 py-3 text-xs font-bold text-purple-600 hover:bg-purple-50 transition border-b flex items-center gap-2"
+                            >
+                              <ArrowRightLeft size={14}/> Transferência
+                            </button>
+                            <button 
+                              onClick={() => abrirModalObservacao(item)}
+                              className="w-full px-4 py-3 text-xs font-bold text-blue-600 hover:bg-blue-50 transition flex items-center gap-2"
+                            >
+                              <FileText size={14}/> Incluir Observação
+                            </button>
+                          </div>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -535,8 +776,8 @@ export default function SistemaEstoqueSupabase() {
             <h2 className="text-2xl font-bold text-slate-700 text-center uppercase">Gestão de Lançamentos</h2>
             <div className="bg-white p-8 rounded-2xl shadow-xl border">
               <div className="grid grid-cols-3 gap-4 mb-8">
-                <button onClick={() => trocarAba('Entrada')} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition ${form.tipo === 'Entrada' ? 'bg-green-50 border-green-500 text-green-700 font-bold' : 'border-slate-100 hover:bg-slate-50'}`}>
-                  <PlusCircle size={24} /> Entrada
+                <button onClick={() => trocarAba('Transferência')} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition ${form.tipo === 'Transferência' ? 'bg-purple-50 border-purple-500 text-purple-700 font-bold' : 'border-slate-100 hover:bg-slate-50'}`}>
+                  <ArrowRightLeft size={24} /> Transferência
                 </button>
                 <button onClick={() => trocarAba('Saída')} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition ${form.tipo === 'Saída' ? 'bg-orange-50 border-orange-500 text-orange-700 font-bold' : 'border-slate-100 hover:bg-slate-50'}`}>
                   <MinusCircle size={24} /> Saída
@@ -575,12 +816,12 @@ export default function SistemaEstoqueSupabase() {
                             </select>
                         </div>
                     </div>
+                    
                     <div>
-                      <label className="block text-sm font-bold mb-1">Lote</label>
+                      <label className="block text-sm font-bold mb-1">Lote<Req/></label>
                       <input type="text" className="w-full p-2.5 border rounded-lg" value={form.novoLote} onChange={e => setForm({...form, novoLote: e.target.value})} />
                     </div>
                     
-                    {/* INPUT COM MÁSCARA DE DATA */}
                     <div>
                         <label className="block text-sm font-bold mb-1">Validade</label>
                         <input 
@@ -589,11 +830,32 @@ export default function SistemaEstoqueSupabase() {
                           placeholder="DD/MM/AAAA" 
                           value={form.novoValidade} 
                           onChange={handleDataChange} 
-                          maxLength={10} // Garante que não passe de 10 caracteres
+                          maxLength={10}
                         />
                     </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-bold mb-1">Fonte do recurso<Req/></label>
+                      <input 
+                        type="text" 
+                        className="w-full p-3 border rounded-xl" 
+                        placeholder="Descrição da fonte ou nº SEG" 
+                        value={form.novoFonteRecurso} 
+                        onChange={e => setForm({...form, novoFonteRecurso: e.target.value})} 
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-bold mb-1">Observações</label>
+                      <textarea 
+                        className="w-full p-3 border rounded-xl resize-none" 
+                        rows={3} 
+                        placeholder="Marca ou Fabricante, Grau (PA, HPLC, USP...), Outras Observações Pertinentes" 
+                        value={form.novoObservacoes} 
+                        onChange={e => setForm({...form, novoObservacoes: e.target.value})} 
+                      />
+                    </div>
                     
-                    {/* CAMPO NOVO (RESTAURADO) */}
                     <div>
                       <label className="block text-sm font-bold mb-1 text-red-700">Controlado Por</label>
                       <select className="w-full p-2.5 border rounded-lg bg-red-50 text-red-800 font-bold" value={form.novoControladoPor} onChange={e => setForm({...form, novoControladoPor: e.target.value})}>
@@ -656,16 +918,34 @@ export default function SistemaEstoqueSupabase() {
                       )}
                     </div>
 
-                    <div className="md:col-span-2">
-                      <label className="block text-sm font-bold mb-1 uppercase text-[10px] tracking-widest">Quantidade da {form.tipo}<Req/></label>
-                      <input 
-                        type="number" 
-                        className="w-full p-3 border-2 border-slate-100 rounded-xl outline-none focus:border-blue-500" 
-                        value={form.quantidade || ''} 
-                        placeholder="0"
-                        onChange={e => setForm({...form, quantidade: Number(e.target.value)})} 
-                      />
-                    </div>
+                    {form.tipo === 'Saída' && (
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-bold mb-1 uppercase text-[10px] tracking-widest">Quantidade da Saída<Req/></label>
+                        <input 
+                          type="number" 
+                          className="w-full p-3 border-2 border-slate-100 rounded-xl outline-none focus:border-blue-500" 
+                          value={form.quantidade || ''} 
+                          placeholder="0"
+                          onChange={e => setForm({...form, quantidade: Number(e.target.value)})} 
+                        />
+                      </div>
+                    )}
+
+                    {form.tipo === 'Transferência' && (
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-bold mb-1 uppercase text-[10px] tracking-widest">Laboratório de Destino<Req/></label>
+                        <select 
+                          className="w-full p-3 border-2 border-slate-100 rounded-xl outline-none focus:border-blue-500 bg-white"
+                          value={form.labDestino}
+                          onChange={e => setForm({...form, labDestino: e.target.value})}
+                        >
+                          <option value="">Selecione o laboratório...</option>
+                          {labsDisponiveis.map(lab => (
+                            <option key={lab} value={lab}>{lab}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -683,6 +963,51 @@ export default function SistemaEstoqueSupabase() {
         )}
 
       </main>
+
+      {/* --- MODAL DE OBSERVAÇÕES --- */}
+      {modalObsAberto && itemParaObs && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="bg-blue-50 p-6 border-b border-blue-100 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-bold text-blue-900">Incluir / Editar Observação</h3>
+                <p className="text-xs text-blue-600 mt-1 uppercase font-bold">{itemParaObs.reagente} • Lote: {itemParaObs.lote || '-'}</p>
+              </div>
+              <button onClick={() => setModalObsAberto(false)} className="text-slate-400 hover:text-red-500 transition bg-white p-2 rounded-full shadow-sm">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <label className="block text-sm font-bold mb-2 text-slate-700">Observações do Item</label>
+              <textarea 
+                className="w-full p-4 border-2 border-slate-200 rounded-xl resize-none focus:border-blue-500 outline-none text-sm" 
+                rows={5} 
+                placeholder="Marca ou Fabricante, Grau (PA, HPLC, USP...), Outras Observações Pertinentes" 
+                value={textoObs} 
+                onChange={(e) => setTextoObs(e.target.value)} 
+                autoFocus
+              />
+              
+              <div className="flex gap-3 mt-6">
+                <button 
+                  onClick={() => setModalObsAberto(false)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={salvarObservacao}
+                  className="flex-1 py-3 bg-[#004586] text-white font-bold rounded-xl hover:bg-blue-800 transition shadow flex items-center justify-center gap-2"
+                >
+                  <Save size={18} /> Salvar Observação
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
