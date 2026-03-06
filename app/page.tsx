@@ -122,6 +122,22 @@ export default function SistemaEstoqueSupabase() {
     fetchHistorico();
   }, []);
 
+  // --- MÁSCARA DE DATA (NOVIDADE AQUI) ---
+  const handleDataChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, ""); // Remove tudo que não é número
+    
+    if (value.length > 8) value = value.slice(0, 8); // Limita a 8 números
+
+    // Adiciona as barras
+    if (value.length >= 5) {
+      value = value.replace(/(\d{2})(\d{2})(\d+)/, "$1/$2/$3");
+    } else if (value.length >= 3) {
+      value = value.replace(/(\d{2})(\d+)/, "$1/$2");
+    }
+
+    setForm({ ...form, novoValidade: value });
+  };
+
   const trocarAba = (novoTipo: 'Entrada' | 'Saída' | 'Cadastro') => {
     setReagenteBusca('');
     setMostrarSugestoes(false);
@@ -312,7 +328,7 @@ export default function SistemaEstoqueSupabase() {
       
       <aside className="w-64 bg-[#004586] text-white flex flex-col shadow-2xl">
         <div className="p-6 border-b border-white/10">
-          <h1 className="text-xl font-bold flex items-center gap-2"><FlaskConical /> LabEstoque</h1>
+          <h1 className="text-xl font-bold flex items-center gap-2"><FlaskConical /> LabEstoque v2.0</h1>
           <p className="text-xs text-slate-300 mt-1 uppercase">Embrapa Clima Temperado</p>
         </div>
         <nav className="flex-1 p-4 space-y-2">
@@ -484,7 +500,6 @@ export default function SistemaEstoqueSupabase() {
                         <span className="text-[10px] text-slate-400 font-normal italic">CAS: {item.cas || '-'}</span>
                       </td>
                       <td className="p-4">
-                        {/* AQUI ESTÁ A CORREÇÃO DE "LIVRES" PARA "NÃO CONTROLADO" */}
                         {item.controlado_por && item.controlado_por !== 'Não controlado' ? (
                           <div className="flex items-center gap-1 text-[10px] text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded w-fit border border-red-100">
                             <ShieldAlert size={12} /> {item.controlado_por}
@@ -564,9 +579,18 @@ export default function SistemaEstoqueSupabase() {
                       <label className="block text-sm font-bold mb-1">Lote</label>
                       <input type="text" className="w-full p-2.5 border rounded-lg" value={form.novoLote} onChange={e => setForm({...form, novoLote: e.target.value})} />
                     </div>
+                    
+                    {/* INPUT COM MÁSCARA DE DATA */}
                     <div>
                         <label className="block text-sm font-bold mb-1">Validade</label>
-                        <input type="text" className="w-full p-2.5 border rounded-lg" placeholder="DD/MM/AAAA" value={form.novoValidade} onChange={e => setForm({...form, novoValidade: e.target.value})} />
+                        <input 
+                          type="text" 
+                          className="w-full p-2.5 border rounded-lg" 
+                          placeholder="DD/MM/AAAA" 
+                          value={form.novoValidade} 
+                          onChange={handleDataChange} 
+                          maxLength={10} // Garante que não passe de 10 caracteres
+                        />
                     </div>
                     
                     {/* CAMPO NOVO (RESTAURADO) */}
